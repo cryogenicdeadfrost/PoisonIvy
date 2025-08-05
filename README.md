@@ -19,15 +19,15 @@ PoisonIvy is a modular, chaos-driven dataset poisoning engine built for machine 
 
 ## ✨ Features
 
-* 🎚 **Anomaly Intensity Control**: Set the level of mutation from 1 (subtle) to 10 (chaotic).
-* 🔄 **Streaming Mode**: Handles massive files line-by-line with minimal memory.
-* 🎲 **Chaos-Based RNG**: Replaces PRNG with a nonlinear chaotic system for unpredictable mutations.
-* 🧵 **Multithreaded Execution**: Parallel mutation with configurable thread counts.
-* 🚀 **GPU Support**: Optional CUDA acceleration for large-scale operations.
-* 🧠 **Custom Algorithm Support**: Inject custom mutation logic via DLLs or SOs.
-* ⚙️ **Performance Profiles**: Configure execution behavior via a single JSON file.
-* 💥 **Multi-Mode Poisoning**: Choose between raw injection, field mutation, or label flipping.
-* 📁 **Cross-Format Future Support**: (Coming soon) JSON, Parquet, and binary support.
+**Anomaly Intensity Control**: Set the level of mutation from 1 (subtle) to 10 (chaotic).
+**Streaming Mode**: Handles massive files line-by-line with minimal memory.
+**Chaos-Based RNG**: Replaces PRNG with a nonlinear chaotic system for unpredictable mutations.
+**Multithreaded Execution**: Parallel mutation with configurable thread counts.
+**GPU Support**: Optional CUDA acceleration for large-scale operations.
+**Custom Algorithm Support**: Inject custom mutation logic via DLLs or SOs.
+**Performance Profiles**: Configure execution behavior via a single JSON file.
+**Multi-Mode Poisoning**: Choose between raw injection, field mutation, or label flipping.
+**Cross-Format Future Support**: (Coming soon) JSON, Parquet, and binary support.
 
 ---
 
@@ -41,7 +41,7 @@ PoisonIvy is a modular, chaos-driven dataset poisoning engine built for machine 
 
 ---
 
-## 🛠 Installation
+## Installation
 
 1. Clone the repository:
 
@@ -73,7 +73,7 @@ PoisonIvy is a modular, chaos-driven dataset poisoning engine built for machine 
 
 ---
 
-## 🚀 Usage
+## Usage
 
 ```bash
 poisonivy.exe <main.csv> <malicious.csv> <output.csv> <profile.json> [custom.dll]
@@ -120,7 +120,7 @@ poisonivy.exe <main.csv> <malicious.csv> <output.csv> <profile.json> [custom.dll
 
 ---
 
-## 🧩 Extending PoisonIvy
+## Extending PoisonIvy
 
 Want more chaos? Add your own randomization algorithm by:
 
@@ -137,7 +137,7 @@ Want more chaos? Add your own randomization algorithm by:
 
 ---
 
-## 📌 Future Roadmap
+## Future Possibility
 
 * [ ] GUI via [Clay](https://www.nicbarker.com/clay) or ImGui
 * [ ] Native Linux/macOS support with `dlopen`
