@@ -1,20 +1,18 @@
 #include <windows.h>
-#include <iostream>
-#include <fstream>
-#include <vector>
-#include <string>
-#include <unordered_set>
-#include <unordered_map>
-#include <sstream>
-#include <random>
 #include <algorithm>
-#include <thread>
 #include <chrono>
-#include <future>
-#include <mutex>
-#include <functional>
-#include <nlohmann/json.hpp> // External library: https://github.com/nlohmann/json
 #include <filesystem>
+#include <fstream>
+#include <future>
+#include <iostream>
+#include <mutex>
+#include <nlohmann/json.hpp>
+#include <random>
+#include <sstream>
+#include <string>
+#include <thread>
+#include <unordered_set>
+#include <vector>
 
 #ifdef USE_CUDA
 #include <cuda_runtime.h>
@@ -23,16 +21,13 @@
 using namespace std;
 using json = nlohmann::json;
 
-//-----------------------------------
-// CHAOS-BASED RNG
-//-----------------------------------
-class ChaosRNG
+class Chaos
 {
     double x;
     double r;
 
 public:
-    ChaosRNG(double seed = 0.654321, double chaos_param = 3.9999) : x(seed), r(chaos_param) {}
+    Chaos(double seed = 0.654321, double p = 3.9999) : x(seed), r(p) {}
 
     double next()
     {
@@ -40,223 +35,252 @@ public:
         return x;
     }
 
-    int next_int(int min, int max)
+    int i(int lo, int hi)
     {
-        return min + static_cast<int>(next() * (max - min + 1));
+        return lo + static_cast<int>(next() * (hi - lo + 1));
     }
 
-    double next_double(double min, double max)
+    double d(double lo, double hi)
     {
-        return min + next() * (max - min);
+        return lo + next() * (hi - lo);
     }
 };
 
-//-----------------------------------
-// PERFORMANCE CONFIGURATION
-//-----------------------------------
-struct PerformanceConfig
+struct Perf
 {
     int threads = 1;
-    bool simulate_delay = false;
+    bool slow = false;
     int delay_ms = 0;
-    bool use_gpu = false;
+    bool gpu = false;
 
-    void load_from_json(const json &profile)
+    void load(const json &cfg)
     {
-        if (profile.contains("performance"))
-        {
-            const auto &perf = profile["performance"];
-            if (perf.contains("threads"))
-                threads = perf["threads"];
-            if (perf.contains("simulate_delay"))
-                simulate_delay = perf["simulate_delay"];
-            if (perf.contains("delay_ms"))
-                delay_ms = perf["delay_ms"];
-            if (perf.contains("use_gpu"))
-                use_gpu = perf["use_gpu"];
-        }
+        if (!cfg.contains("performance"))
+            return;
+        const auto &p = cfg["performance"];
+        if (p.contains("threads"))
+            threads = p["threads"];
+        if (p.contains("simulate_delay"))
+            slow = p["simulate_delay"];
+        if (p.contains("delay_ms"))
+            delay_ms = p["delay_ms"];
+        if (p.contains("use_gpu"))
+            gpu = p["use_gpu"];
     }
 };
 
-//-----------------------------------
-// CUSTOM ALGORITHM SUPPORT (Windows)
-//-----------------------------------
-using CustomMutationFunc = vector<string> (*)(const string &, const vector<string> &, const json &);
+using MutFn = vector<string> (*)(const string &, const vector<string> &, const json &);
 
-CustomMutationFunc load_custom_algorithm(const string &dll_path)
+MutFn load_custom(const string &dll)
 {
-    HINSTANCE hDll = LoadLibraryA(dll_path.c_str());
-    if (!hDll)
+    HINSTANCE h = LoadLibraryA(dll.c_str());
+    if (!h)
     {
-        cerr << "Could not load custom DLL: " << dll_path << endl;
+        cerr << "Could not load custom DLL: " << dll << endl;
         return nullptr;
     }
-    return reinterpret_cast<CustomMutationFunc>(GetProcAddress(hDll, "custom_mutate"));
+    return reinterpret_cast<MutFn>(GetProcAddress(h, "custom_mutate"));
 }
 
-//-----------------------------------
-// READ HELPERS
-//-----------------------------------
-vector<string> read_lines(const string &file_path)
+vector<string> read_lines(const string &path)
 {
-    ifstream file(file_path);
-    vector<string> lines;
+    ifstream f(path);
+    vector<string> out;
     string line;
-    while (getline(file, line))
-        lines.push_back(line);
-    return lines;
+    while (getline(f, line))
+        out.push_back(line);
+    return out;
 }
 
-json read_json(const string &file_path)
+json read_cfg(const string &path)
 {
-    ifstream file(file_path);
+    ifstream f(path);
     json j;
-    file >> j;
+    f >> j;
     return j;
 }
 
-//-----------------------------------
-// DEFAULT MUTATION LOGIC
-//-----------------------------------
-vector<string> mutate_line(const string &line, const vector<string> &header_cols, const json &profile, ChaosRNG &rng)
+vector<string> split_csv(const string &line)
 {
-    vector<string> mutated_lines;
-    istringstream ss(line);
-    string token;
     vector<string> cols;
-    while (getline(ss, token, ','))
-        cols.push_back(token);
+    istringstream ss(line);
+    string t;
+    while (getline(ss, t, ','))
+        cols.push_back(t);
+    return cols;
+}
 
-    int intensity = profile.contains("anomaly_level") ? profile["anomaly_level"].get<int>() : 5;
-    double scale_factor = 1.0 + (intensity / 10.0);
-
-    for (const auto &field : profile["mutate_columns"])
+string join_csv(const vector<string> &cols)
+{
+    ostringstream out;
+    for (size_t i = 0; i < cols.size(); ++i)
     {
-        auto it = find(header_cols.begin(), header_cols.end(), field);
-        if (it != header_cols.end())
+        out << cols[i];
+        if (i + 1 < cols.size())
+            out << ',';
+    }
+    return out.str();
+}
+
+string mode_of(const json &cfg)
+{
+    if (cfg.contains("poison_mode"))
+        return cfg["poison_mode"].get<string>();
+    return "mix";
+}
+
+string mutate_one(const string &line, const vector<string> &hdr, const json &cfg, Chaos &rng)
+{
+    vector<string> cols = split_csv(line);
+    int level = cfg.value("anomaly_level", 5);
+    double scale = 1.0 + (level / 10.0);
+
+    if (cfg.contains("mutate_columns") && cfg["mutate_columns"].is_array())
+    {
+        for (const auto &f : cfg["mutate_columns"])
         {
-            int idx = distance(header_cols.begin(), it);
-            if (profile["anomaly_boost"].contains(field))
+            auto it = find(hdr.begin(), hdr.end(), f.get<string>());
+            if (it == hdr.end())
+                continue;
+            int idx = static_cast<int>(distance(hdr.begin(), it));
+            if (idx < 0 || static_cast<size_t>(idx) >= cols.size())
+                continue;
+
+            if (cfg.contains("anomaly_boost") && cfg["anomaly_boost"].contains(f.get<string>()))
             {
-                double factor = profile["anomaly_boost"][field] * scale_factor;
+                double k = cfg["anomaly_boost"][f.get<string>()].get<double>() * scale;
                 try
                 {
-                    cols[idx] = to_string(stod(cols[idx]) * rng.next_double(factor, factor * 2));
+                    cols[idx] = to_string(stod(cols[idx]) * rng.d(k, k * 2));
                 }
                 catch (...)
                 {
-                    cols[idx] = to_string(rng.next_double(1000, 9999));
+                    cols[idx] = to_string(rng.d(1000, 9999));
                 }
             }
             else
             {
-                cols[idx] = to_string(rng.next_double(1000, 9999));
+                cols[idx] = to_string(rng.d(1000, 9999));
             }
         }
     }
 
-    cols.back() = profile["label"];
+    if (!cols.empty())
+        cols.back() = cfg.value("label", string("malicious"));
 
-    ostringstream oss;
-    for (size_t i = 0; i < cols.size(); ++i)
-    {
-        oss << cols[i];
-        if (i != cols.size() - 1)
-            oss << ",";
-    }
-
-    mutated_lines.push_back(oss.str());
-    return mutated_lines;
+    return join_csv(cols);
 }
 
-//-----------------------------------
-// THREADING STREAM INJECTION FUNCTION
-//-----------------------------------
-void stream_inject(const string &main_path,
-                   const vector<string> &malicious_data,
-                   const vector<string> &header_cols,
-                   const json &profile,
-                   const string &output_path,
-                   const PerformanceConfig &perf,
-                   CustomMutationFunc custom_algo = nullptr)
+string flip_one(const string &line, const json &cfg)
 {
+    size_t p = line.rfind(',');
+    if (p == string::npos)
+        return line;
+    return line.substr(0, p) + "," + cfg.value("label", string("malicious"));
+}
 
-    ChaosRNG rng(profile["chaos_seed"], profile["chaos_param"]);
-    int inject_count = profile["inject_count"];
-    unordered_set<int> inject_positions;
-    mutex file_mutex;
+bool want_inject(const unordered_set<int> &spots, int line_no)
+{
+    return spots.find(line_no) != spots.end();
+}
 
-    int line_count = 0;
-    ifstream infile(main_path);
-    ofstream outfile(output_path);
+string poison_one(const string &line,
+                 int line_no,
+                 const unordered_set<int> &spots,
+                 const vector<string> &bad,
+                 const vector<string> &hdr,
+                 const json &cfg,
+                 Chaos &rng,
+                 MutFn custom)
+{
+    if (!want_inject(spots, line_no))
+        return line;
+
+    string mode = mode_of(cfg);
+    if (mode == "inject")
+    {
+        return bad[rng.i(0, static_cast<int>(bad.size()) - 1)];
+    }
+    if (mode == "mutate")
+    {
+        return custom ? custom(line, hdr, cfg)[0] : mutate_one(line, hdr, cfg, rng);
+    }
+    if (mode == "flip")
+    {
+        return flip_one(line, cfg);
+    }
+
+    int pick = rng.i(0, 2);
+    if (pick == 0)
+        return bad[rng.i(0, static_cast<int>(bad.size()) - 1)];
+    if (pick == 1)
+        return custom ? custom(line, hdr, cfg)[0] : mutate_one(line, hdr, cfg, rng);
+    return flip_one(line, cfg);
+}
+
+unordered_set<int> pick_spots(int data_lines, int count, Chaos &rng)
+{
+    unordered_set<int> s;
+    if (data_lines <= 0 || count <= 0)
+        return s;
+    int cap = min(data_lines, count);
+    while (static_cast<int>(s.size()) < cap)
+        s.insert(rng.i(1, data_lines));
+    return s;
+}
+
+int count_data_lines(const string &path)
+{
+    ifstream f(path);
     string line;
+    int n = -1;
+    while (getline(f, line))
+        ++n;
+    return max(0, n);
+}
 
-    auto process_line = [&](const string &line, int line_number)
+void run_stream(const string &main_path,
+                const vector<string> &bad,
+                const vector<string> &hdr,
+                const json &cfg,
+                const string &out_path,
+                const Perf &perf,
+                MutFn custom = nullptr)
+{
+    Chaos rng(cfg.value("chaos_seed", 0.654321), cfg.value("chaos_param", 3.9999));
+    int inject_n = cfg.value("inject_count", 0);
+    int data_n = count_data_lines(main_path);
+    auto spots = pick_spots(data_n, inject_n, rng);
+
+    ifstream in(main_path);
+    ofstream out(out_path);
+    string line;
+    int line_no = 0;
+
+    while (getline(in, line))
     {
-        string result;
-        if (inject_positions.count(line_number))
+        if (line_no == 0)
         {
-            int mode = rng.next_int(0, 2);
-            if (mode == 0)
-            {
-                result = malicious_data[rng.next_int(0, malicious_data.size() - 1)];
-            }
-            else if (mode == 1)
-            {
-                vector<string> mutated = custom_algo ? custom_algo(line, header_cols, profile) : mutate_line(line, header_cols, profile, rng);
-                result = mutated[0];
-            }
-            else
-            {
-                size_t last_comma = line.rfind(',');
-                result = (last_comma != string::npos) ? line.substr(0, last_comma) + "," + (string)profile["label"] : line;
-            }
-        }
-        else
-        {
-            result = line;
-        }
-
-        lock_guard<mutex> lock(file_mutex);
-        outfile << result << "\n";
-    };
-
-    while (getline(infile, line))
-    {
-        if (line_count == 0)
-        {
-            outfile << line << "\n";
-            ++line_count;
+            out << line << "\n";
+            ++line_no;
             continue;
         }
 
-        if (inject_positions.size() < inject_count)
-        {
-            inject_positions.insert(rng.next_int(1, 1000000));
-        }
-
-        if (perf.threads > 1)
-        {
-            async(launch::async, process_line, line, line_count);
-        }
-        else
-        {
-            process_line(line, line_count);
-        }
-
-        if (perf.simulate_delay && perf.delay_ms > 0)
+        out << poison_one(line, line_no, spots, bad, hdr, cfg, rng, custom) << "\n";
+        if (perf.slow && perf.delay_ms > 0)
             this_thread::sleep_for(chrono::milliseconds(perf.delay_ms));
-
-        ++line_count;
+        ++line_no;
     }
-
-    infile.close();
-    outfile.close();
 }
 
-//-----------------------------------
-// MAIN
-//-----------------------------------
+vector<string> parse_header(const string &main_csv)
+{
+    ifstream f(main_csv);
+    string header;
+    getline(f, header);
+    return split_csv(header);
+}
+
 int main(int argc, char *argv[])
 {
     if (argc < 5 || argc > 6)
@@ -266,45 +290,40 @@ int main(int argc, char *argv[])
     }
 
     string main_csv = argv[1];
-    string mal_csv = argv[2];
+    string bad_csv = argv[2];
     string out_csv = argv[3];
-    string json_config = argv[4];
+    string cfg_file = argv[4];
 
-    vector<string> malicious_data = read_lines(mal_csv);
-    json profile = read_json(json_config);
-
-    PerformanceConfig perf;
-    perf.load_from_json(profile);
-
-    ifstream test(main_csv);
-    string header_line;
-    getline(test, header_line);
-    test.close();
-
-    vector<string> header_cols;
-    istringstream ss(header_line);
-    string col;
-    while (getline(ss, col, ','))
-        header_cols.push_back(col);
-
-    CustomMutationFunc custom_algo = nullptr;
-    if (argc == 6)
+    vector<string> bad = read_lines(bad_csv);
+    json cfg = read_cfg(cfg_file);
+    if (bad.empty())
     {
-        custom_algo = load_custom_algorithm(argv[5]);
-        if (!custom_algo)
-        {
-            cerr << "⚠️ Warning: Falling back to built-in mutation logic.\n";
-        }
+        cerr << "Malicious dataset is empty.\n";
+        return 1;
     }
 
-    cout << "🔁 Running in streaming mode with " << perf.threads << " thread(s)...";
-    if (perf.use_gpu)
+    Perf perf;
+    perf.load(cfg);
+
+    vector<string> hdr = parse_header(main_csv);
+
+    MutFn custom = nullptr;
+    if (argc == 6)
+    {
+        custom = load_custom(argv[5]);
+        if (!custom)
+            cerr << "Warning: Falling back to built-in mutation logic.\n";
+    }
+
+    cout << "Running in streaming mode with " << perf.threads << " thread(s)...";
+    if (perf.gpu)
         cout << " (GPU enabled)";
     cout << endl;
 
-    stream_inject(main_csv, malicious_data, header_cols, profile, out_csv, perf, custom_algo);
+    run_stream(main_csv, bad, hdr, cfg, out_csv, perf, custom);
 
-    cout << "✅ Injection complete. " << profile["inject_count"] << " entries injected with anomaly level "
-         << (profile.contains("anomaly_level") ? (int)profile["anomaly_level"] : 5) << ".\nOutput saved to: " << out_csv << endl;
+    cout << "Injection complete. " << cfg.value("inject_count", 0)
+         << " entries requested with anomaly level " << cfg.value("anomaly_level", 5)
+         << ". Output saved to: " << out_csv << endl;
     return 0;
 }
