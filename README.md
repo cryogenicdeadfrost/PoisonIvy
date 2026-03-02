@@ -1,35 +1,44 @@
 # PoisonIvy
 
-PoisonIvy is a C++ dataset poisoning tool for adversarial ML experiments, IDS benchmarking, and anomaly simulation.
+PoisonIvy is a lightweight C++ dataset poisoning utility for adversarial ML experiments, IDS benchmarking, and anomaly simulation.
 
-## Core capabilities
+## Overview
 
-- Streaming CSV poisoning path with low memory pressure.
-- Chaos-based random source for mutation and mode sampling.
-- Multi-mode poisoning with `poison_mode`:
-  - `inject`
-  - `mutate`
-  - `flip`
-  - `mix` (automatic blend)
-- Optional custom mutation plugin (`custom_mutate`).
-- Validation for key profile fields before execution.
-- Run reports:
-  - JSON report (`report_json`)
-  - HTML dashboard (`dashboard_html`) for GUI-style run inspection
-  - Optional auto-open (`open_dashboard`)
+PoisonIvy mutates or injects rows in CSV datasets with configurable behavior driven by a JSON profile. It is designed to keep the core flow simple and stream input/output without loading full files into memory.
+
+## Features
+
+- Streaming CSV processing for low memory overhead.
+- Chaos-based number generation for non-linear mutation behavior.
+- Multi-mode poisoning through `poison_mode`:
+  - `inject`: replace selected rows with rows from malicious CSV.
+  - `mutate`: mutate configured fields and relabel rows.
+  - `flip`: keep values and only flip label.
+  - `mix` (default): random blend of inject/mutate/flip per selected row.
+- Profile-based performance settings (`threads`, delay simulation, GPU flag for build integrations).
+- Optional custom mutation plugin loading (`custom_mutate` symbol from DLL).
+
+## Requirements
+
+- C++17 compiler
+- Windows (current implementation uses `LoadLibraryA`)
+- `nlohmann/json` single-header library
+- Optional CUDA toolkit for builds using `USE_CUDA`
 
 ## Build
 
-### Linux / macOS
-
-```bash
-g++ -std=c++17 poisonivy.cpp -I. -ldl -o poisonivy
-```
-
-### Windows (MSVC)
+### MSVC (Windows)
 
 ```bash
 cl /std:c++17 poisonivy.cpp /Iexternal /Fe:poisonivy.exe
+```
+
+### CMake (optional)
+
+```bash
+mkdir build && cd build
+cmake ..
+cmake --build .
 ```
 
 ## Usage
@@ -37,6 +46,14 @@ cl /std:c++17 poisonivy.cpp /Iexternal /Fe:poisonivy.exe
 ```bash
 ./poisonivy <main.csv> <malicious.csv> <output.csv> <profile.json> [custom_lib]
 ```
+
+Arguments:
+
+- `main.csv`: source dataset (first row must be header).
+- `malicious.csv`: candidate rows for direct injection.
+- `output.csv`: destination poisoned dataset.
+- `profile.json`: poisoning profile.
+- `custom.dll`: optional plugin exporting `custom_mutate`.
 
 ## Profile example
 
@@ -85,3 +102,20 @@ std::vector<std::string> custom_mutate(
 ```
 
 If plugin load fails, PoisonIvy falls back to built-in mutation.
+## Custom mutation plugin contract
+
+```cpp
+extern "C" __declspec(dllexport)
+std::vector<std::string> custom_mutate(
+    const std::string& line,
+    const std::vector<std::string>& headers,
+    const nlohmann::json& profile);
+```
+
+PoisonIvy expects at least one output row and uses index `0`.
+
+## Notes
+
+- Injection positions are selected within the available data line range.
+- Header row is always preserved.
+- If plugin loading fails, PoisonIvy automatically falls back to built-in mutation logic.
