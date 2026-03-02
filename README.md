@@ -44,7 +44,7 @@ cmake --build .
 ## Usage
 
 ```bash
-poisonivy.exe <main.csv> <malicious.csv> <output.csv> <profile.json> [custom.dll]
+./poisonivy <main.csv> <malicious.csv> <output.csv> <profile.json> [custom_lib]
 ```
 
 Arguments:
@@ -70,6 +70,9 @@ Arguments:
   },
   "chaos_seed": 0.789,
   "chaos_param": 3.9999,
+  "report_json": "run_report.json",
+  "dashboard_html": "run_dashboard.html",
+  "open_dashboard": false,
   "performance": {
     "threads": 4,
     "simulate_delay": false,
@@ -79,6 +82,26 @@ Arguments:
 }
 ```
 
+## Dashboard output
+
+The HTML dashboard contains:
+
+- run summary (mode, selected rows, output rows)
+- mutation mix bar with inject/mutate/flip counts
+
+This is intended as a fast local GUI artifact for production runs and regression checks.
+
+## Plugin contract
+
+```cpp
+extern "C"
+std::vector<std::string> custom_mutate(
+    const std::string& line,
+    const std::vector<std::string>& headers,
+    const nlohmann::json& profile);
+```
+
+If plugin load fails, PoisonIvy falls back to built-in mutation.
 ## Custom mutation plugin contract
 
 ```cpp
